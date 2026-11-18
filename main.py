@@ -60,12 +60,21 @@ def on_hello(state):
     SYMBOL = state.hello["symbols"][0]["symbol"]
 
 
-def _momentum_bps():
-    """Trailing LOOKBACK_BARS return in bps, as an exact integer comparison.
+def _bps_above(now, then, bps):
+    """True when now sits more than `bps` basis points above then (exact ints)."""
+    return now * 10000 > then * (10000 + bps)
 
-    Returns (numerator, denominator) so callers can compare without floats:
-    momentum > +X bps  <=>  now * 10000 > then * (10000 + X).
-    Returns None until LOOKBACK_BARS + 1 closes are known.
+
+def _bps_below(now, then, bps):
+    """True when now sits more than `bps` basis points below then (exact ints)."""
+    return now * 10000 < then * (10000 - bps)
+
+
+def _momentum():
+    """The trailing LOOKBACK_BARS return as (now, then) closes, or None.
+
+    `then` is the close LOOKBACK_BARS bars back, so (now - then) / then is the
+    trailing return; callers compare it with _bps_above/_bps_below.
     """
     if len(closes) < LOOKBACK_BARS + 1:
         return None
@@ -99,11 +108,11 @@ def on_batch(state, batch):
         if state.seq - entry_seq < MIN_HOLD_BARS:
             return []
         # Trailing stop: 100 bps below the peak since entry.
-        if close * 10000 < high_since_entry * (10000 - TRAIL_BPS):
+        if _bps_below(close, high_since_entry, TRAIL_BPS):
             return [_sell_all(state)]
         # Momentum turned: trailing 120-bar return below -40 bps.
-        mom = _momentum_bps()
-        if mom is not None and mom[0] * 10000 < mom[1] * (10000 - EXIT_BPS):
+        mom = _momentum()
+        if mom is not None and _bps_below(mom[0], mom[1], EXIT_BPS):
             return [_sell_all(state)]
         return []
 
@@ -113,11 +122,11 @@ def on_batch(state, batch):
         high_since_entry = None
     if state.seq < cool_until_seq:
         return []
-    mom = _momentum_bps()
+    mom = _momentum()
     if mom is None:
         return []
     # Enter when the trailing 120-bar return exceeds +25 bps, fully invested.
-    if mom[0] * 10000 > mom[1] * (10000 + ENTRY_BPS):
+    if _bps_above(mom[0], mom[1], ENTRY_BPS):
         notional = min(state.cash, state.weight_room(SYMBOL))
         if notional < int(state.hello["fees"]["min_notional_quote_units"]):
             return []
